@@ -4,7 +4,8 @@ use core::{
     ptr::null_mut,
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering::*},
 };
-use owned_alloc::OwnedAlloc;
+use std::alloc::{alloc, Layout};
+use std::ptr::NonNull;
 
 /// A cached thread-id. Repeated calls to [`ThreadLocal`](super::ThreadLocal)'s
 /// methods with cached IDs should be faster than reloading the ID everytime.
@@ -91,12 +92,24 @@ impl IdGuard {
 
     fn create_node() -> Self {
         let new = Node {
-            free: AtomicUsize::new(usize::max_value()),
+            free: AtomicUsize::new(usize::MAX),
             next: AtomicPtr::new(null_mut()),
         };
 
-        let alloc = OwnedAlloc::new(new);
-        let nnptr = alloc.into_raw();
+        let nnptr: NonNull<_> = {
+            let layout = Layout::new::<Node>();
+
+            let res = if layout.size() == 0 {
+                NonNull::dangling()
+            } else {
+                NonNull::new(unsafe { alloc(layout) })
+                    .map(NonNull::cast::<Node>).expect("alloc failed")
+            };
+            unsafe{
+                res.as_ptr().write(new)
+            }
+            res
+        };
 
         let prev = ID_LIST_BACK.swap(nnptr.as_ptr(), AcqRel);
 
